@@ -8,14 +8,6 @@
 cat <<"EOF"
 
 -------------------------------------------------
-        .
-       / \         _       _  _      ___  ___
-      /^  \      _| |_    | || |_  _|   \| __|
-     /  _  \    |_   _|   | __ | || | |) | _|
-    /  | | ~\     |_|     |_||_|\_, |___/|___|
-   /.-'   '-.\                  |__/
-
--------------------------------------------------
 
 EOF
 
@@ -28,8 +20,9 @@ if ! source "${scrDir}/global_fn.sh"; then
     echo "Error: unable to source global_fn.sh..."
     exit 1
 fi
-# Run the package manager detection
+# Run the package manager detection (this populates $PKG_MANAGER as dnf5 on Fedora 44)
 detect_package_manager
+
 #------------------#
 # evaluate options #
 #------------------#
@@ -96,7 +89,7 @@ fi
 #--------------------#
 if [ ${flg_Install} -eq 1 ] && [ ${flg_Restore} -eq 1 ]; then
     cat <<"EOF"
-                _         _       _ _
+                 _         _       _ _
  ___ ___ ___   |_|___ ___| |_ ___| | |
 | . |  _| -_|  | |   |_ -|  _| .'| | |
 |  _|_| |___|  |_|_|_|___|_| |__,|_|_|
@@ -126,11 +119,12 @@ EOF
     #----------------------#
     shift $((OPTIND - 1))
     custom_pkg=$1
-    # Select the correct package list based on the package manager
-    if [[ "$PKG_MANAGER" == "dnf" ]]; then
-      sudo  "${scrDir}/install_apps.sh"
+    # Select the correct package list based on the package manager (Fedora 44 compatible)
+    if [[ "$PKG_MANAGER" == "dnf" || "$PKG_MANAGER" == "dnf5" ]]; then
+      sudo "${scrDir}/install_apps.sh"
     fi
     echo -e "\n#user packages" >>"${scrDir}/install_pkg.lst" # Add a marker for user packages
+    
     #--------------------------------#
     # add nvidia drivers to the list #
     #--------------------------------#
@@ -138,6 +132,7 @@ EOF
         case "${PKG_MANAGER}" in
             apt) echo "nvidia-driver" >> "${scrDir}/install_pkg.lst" ;;
             dnf) sudo dnf install -y akmod-nvidia ;;
+            dnf5) sudo dnf5 install -y akmod-nvidia ;;
             pacman)
                 echo "nvidia" >> "${scrDir}/install_pkg.lst"
                 echo "linux-headers" >> "${scrDir}/install_pkg.lst"
@@ -210,7 +205,7 @@ fi
 if [ ${flg_Service} -eq 1 ]; then
     cat <<"EOF"
 
-                 _
+                  _
  ___ ___ ___ _ _|_|___ ___ ___
 |_ -| -_|  _| | | |  _| -_|_ -|
 |___|___|_|  \_/|_|___|___|___|
