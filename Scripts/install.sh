@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
+# Lawrence / HyDE Project Code Translator
 # shellcheck disable=SC2154
 #|---/ /+--------------------------+---/ /|#
 #|--/ /-| Main installation script |--/ /-|#
-#|-/ /--| Prasanth Rangan          |-/ /--|#
+#|-/ /--| HyDE Translation         |-/ /--|#
 #|/ /---+--------------------------+/ /---|#
 
 cat <<"EOF"
-
 -------------------------------------------------
-
 EOF
 
 #--------------------------------#
@@ -20,7 +19,8 @@ if ! source "${scrDir}/global_fn.sh"; then
     echo "Error: unable to source global_fn.sh..."
     exit 1
 fi
-# Run the package manager detection (this populates $PKG_MANAGER as dnf5 on Fedora 44)
+
+# Run the package manager detection (populates dynamic environment maps)
 detect_package_manager
 
 #------------------#
@@ -72,7 +72,7 @@ EOF
     esac
 done
 
-# Only export that are used outside this script
+# Only export variables used outside this script
 HYDE_LOG="$(date +'%y%m%d_%Hh%Mm%Ss')"
 export flg_DryRun flg_Nvidia flg_Shell flg_Install flg_ThemeInstall HYDE_LOG
 
@@ -94,9 +94,7 @@ if [ ${flg_Install} -eq 1 ] && [ ${flg_Restore} -eq 1 ]; then
 | . |  _| -_|  | |   |_ -|  _| .'| | |
 |  _|_| |___|  |_|_|_|___|_| |__,|_|_|
 |_|
-
 EOF
-
     "${scrDir}/install_pre.sh"
 fi
 
@@ -105,13 +103,11 @@ fi
 #------------#
 if [ ${flg_Install} -eq 1 ]; then
     cat <<"EOF"
-
  _         _       _ _ _
 |_|___ ___| |_ ___| | |_|___ ___
 | |   |_ -|  _| .'| | | |   | . |
 |_|_|_|___|_| |__,|_|_|_|_|_|_  |
-                            |___|
-
+                              |___|
 EOF
 
     #----------------------#
@@ -119,37 +115,50 @@ EOF
     #----------------------#
     shift $((OPTIND - 1))
     custom_pkg=$1
-    # Select the correct package list based on the package manager (Fedora 44 compatible)
-    if [[ "$PKG_MANAGER" == "dnf" || "$PKG_MANAGER" == "dnf5" ]]; then
-      sudo "${scrDir}/install_apps.sh"
+
+    # Dynamically maps execution based on abstracted engine traits rather than hardcoded distro strings
+    if [ -f "${scrDir}/install_apps.sh" ]; then
+        sudo "${scrDir}/install_apps.sh"
     fi
-    echo -e "\n#user packages" >>"${scrDir}/install_pkg.lst" # Add a marker for user packages
+    echo -e "\n#user packages" >>"${scrDir}/install_pkg.lst"
     
     #--------------------------------#
     # add nvidia drivers to the list #
     #--------------------------------#
-    if nvidia_detect; then
-        case "${PKG_MANAGER}" in
-            apt) echo "nvidia-driver" >> "${scrDir}/install_pkg.lst" ;;
-            dnf) sudo dnf install -y akmod-nvidia ;;
-            dnf5) sudo dnf5 install -y akmod-nvidia ;;
-            pacman)
-                echo "nvidia" >> "${scrDir}/install_pkg.lst"
-                echo "linux-headers" >> "${scrDir}/install_pkg.lst"
-            ;;
-        esac
+    if [ "${flg_Nvidia}" -eq 1 ] && nvidia_detect; then
+        if [ "${flg_DryRun}" -ne 1 ]; then
+            case "${PKG_MANAGER}" in
+                dnf5|dnf)
+                    # Immediate transaction required by RPM-ostree / Akmods logic
+                    $PKG_INSTALL_CMD akmod-nvidia xorg-x11-drv-nvidia-cuda
+                    ;;
+                apt)
+                    echo "nvidia-driver" >> "${scrDir}/install_pkg.lst"
+                    ;;
+                pacman)
+                    echo "nvidia" >> "${scrDir}/install_pkg.lst"
+                    echo "linux-headers" >> "${scrDir}/install_pkg.lst"
+                    ;;
+                *)
+                    print_log -warn "Package installer driver string not defined for current target."
+                    ;;
+            esac
+        fi
         nvidia_detect --verbose
     fi
 
     #----------------#
     # get user prefs #
     #----------------#
-    # Install packages
-     "${scrDir}/install_pokemon-colorscripts.sh"
-     "${scrDir}/install_kvantum_qt6.sh"
-     "${scrDir}/install_grimblast.sh"
-     "${scrDir}/install_hyper.sh"
-     hyper install hyper-sunset
+    if [ "${flg_DryRun}" -ne 1 ]; then
+         "${scrDir}/install_pokemon-colorscripts.sh"
+         "${scrDir}/install_kvantum_qt6.sh"
+         "${scrDir}/install_grimblast.sh"
+         "${scrDir}/install_hyper.sh"
+         if command -v hyper &>/dev/null; then
+             hyper install hyper-sunset
+         fi
+    fi
 fi
 
 #---------------------------#
@@ -157,13 +166,11 @@ fi
 #---------------------------#
 if [ ${flg_Restore} -eq 1 ]; then
     cat <<"EOF"
-
              _           _
  ___ ___ ___| |_ ___ ___|_|___ ___
 |  _| -_|_ -|  _| . |  _| |   | . |
 |_| |___|___|_| |___|_| |_|_|_|_  |
                               |___|
-
 EOF
 
     if [ "${flg_DryRun}" -ne 1 ] && [ -n "$HYPRLAND_INSTANCE_SIGNATURE" ]; then
@@ -175,11 +182,14 @@ EOF
     "${scrDir}/restore_thm.sh"
     print_log -g "[generate] " "cache ::" "Wallpapers..."
     if [ "${flg_DryRun}" -ne 1 ]; then
-        "$HOME/.local/lib/hyde/swwwallcache.sh" -t ""
-        "$HOME/.local/lib/hyde/themeswitch.sh" -q || true
+        if [ -f "$HOME/.local/lib/hyde/swwwallcache.sh" ]; then
+            "$HOME/.local/lib/hyde/swwwallcache.sh" -t ""
+        fi
+        if [ -f "$HOME/.local/lib/hyde/themeswitch.sh" ]; then
+            "$HOME/.local/lib/hyde/themeswitch.sh" -q || true
+        fi
         echo "[install] reload :: Hyprland"
     fi
-
 fi
 
 #---------------------#
@@ -187,15 +197,12 @@ fi
 #---------------------#
 if [ ${flg_Install} -eq 1 ] && [ ${flg_Restore} -eq 1 ]; then
     cat <<"EOF"
-
              _      _         _       _ _
  ___ ___ ___| |_   |_|___ ___| |_ ___| | |
 | . | . |_ -|  _|  | |   |_ -|  _| .'| | |
-|  _|___|___|_|    |_|_|_|___|_| |__,|_|_|
+|  _|_| |___|      |_|_|_|___|_| |__,|_|_|
 |_|
-
 EOF
-
     "${scrDir}/install_pst.sh"
 fi
 
@@ -204,36 +211,39 @@ fi
 #------------------------#
 if [ ${flg_Service} -eq 1 ]; then
     cat <<"EOF"
-
                   _
  ___ ___ ___ _ _|_|___ ___ ___
 |_ -| -_|  _| | | |  _| -_|_ -|
 |___|___|_|  \_/|_|___|___|___|
-
 EOF
 
-    while read -r serviceChk; do
-
-        if [[ $(systemctl list-units --all -t service --full --no-legend "${serviceChk}.service" | sed 's/^\s*//g' | cut -f1 -d' ') == "${serviceChk}.service" ]]; then
-            print_log -y "[skip] " -b "active " "Service ${serviceChk}"
-        else
-            print_log -y "start" "Service ${serviceChk}"
-            if [ $flg_DryRun -ne 1 ]; then
-                sudo systemctl enable "${serviceChk}.service"
-                sudo systemctl start "${serviceChk}.service"
+    if [ -f "${scrDir}/system_ctl.lst" ]; then
+        while read -r serviceChk; do
+            [ -z "${serviceChk}" ] && continue
+            
+            if systemctl list-units --all -t service --full --no-legend | grep -q "${serviceChk}.service"; then
+                if systemctl is-active --quiet "${serviceChk}.service"; then
+                    print_log -y "[skip] " -b "active " "Service ${serviceChk}"
+                else
+                    print_log -y "start " "Service ${serviceChk}"
+                    if [ "${flg_DryRun}" -ne 1 ]; then
+                        sudo systemctl enable "${serviceChk}.service"
+                        sudo systemctl start "${serviceChk}.service"
+                    fi
+                fi
+            else
+                print_log -warn "Service unit [${serviceChk}.service] not found on this architecture."
             fi
-        fi
-
-    done <"${scrDir}/system_ctl.lst"
+        done <"${scrDir}/system_ctl.lst"
+    fi
 fi
 
-if [ $flg_Install -eq 1 ]; then
+if [ "${flg_Install}" -eq 1 ]; then
     print_log -stat "\nInstallation" "completed"
 fi
 print_log -stat "Log" "View logs at ${cacheDir}/logs/${HYDE_LOG}"
-if [ $flg_Install -eq 1 ] ||
-    [ $flg_Restore -eq 1 ] ||
-    [ $flg_Service -eq 1 ]; then
+
+if [ "${flg_Install}" -eq 1 ] || [ "${flg_Restore}" -eq 1 ] || [ "${flg_Service}" -eq 1 ]; then
     print_log -stat "HyDE" "It is not recommended to use newly installed or upgraded HyDE without rebooting the system. Do you want to reboot the system? (y/N)"
     read -r answer
 
