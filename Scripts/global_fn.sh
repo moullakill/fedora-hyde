@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #|---/ /+------------------+---/ /|#
 #|--/ /-| Global functions |--/ /-|#
-#|-/ /--| Prasanth Rangan  |-/ /--|#
+#|-/ /--| HyDE Translation |-/ /--|#
 #|/ /---+------------------+/ /---|#
 
 set -e
 
 # Directory setup
 scrDir="$(dirname "$(realpath "$0")")"
-cloneDir="$(dirname "${scrDir}")" # fallback, we will use CLONE_DIR now
+cloneDir="$(dirname "${scrDir}")" 
 cloneDir="${CLONE_DIR:-${cloneDir}}"
 confDir="${XDG_CONFIG_HOME:-$HOME/.config}"
 cacheDir="${XDG_CACHE_HOME:-$HOME/.cache}/hyde"
@@ -19,10 +19,63 @@ export confDir
 export cacheDir
 export shlList
 
-# Package management functions using DNF5 for Fedora 44
+# ----------------------------------------------------------------------
+# Distro Configuration Engine & Architecture Detection
+# ----------------------------------------------------------------------
+# Read distro.conf mapping to dynamically resolve abstract commands.
+# Optimizes defaults for Fedora 44 when specific commands are not provisioned.
+if [ -f "${confDir}/hyde/distro.conf" ]; then
+    # shellcheck disable=SC1091
+    source "${confDir}/hyde/distro.conf"
+fi
+
+detect_package_manager() {
+    if [ -n "${PKG_MANAGER}" ]; then
+        return 0 # Already sourced or declared via distro.conf
+    fi
+
+    if command -v dnf5 &> /dev/null; then
+        export PKG_MANAGER="dnf5"
+        export PKG_QUERY_INSTALLED="dnf5 list --installed"
+        export PKG_QUERY_AVAILABLE="dnf5 info"
+        export PKG_REQUERY_COPR="dnf5 repoquery --enabled"
+        export PKG_INSTALL_CMD="sudo dnf5 install -y"
+        export PKG_UPDATE_CMD="sudo dnf5 check-upgrade -y"
+    elif command -v dnf &> /dev/null; then
+        export PKG_MANAGER="dnf"
+        export PKG_QUERY_INSTALLED="dnf list --installed"
+        export PKG_QUERY_AVAILABLE="dnf info"
+        export PKG_REQUERY_COPR="dnf repoquery --enabled"
+        export PKG_INSTALL_CMD="sudo dnf install -y"
+        export PKG_UPDATE_CMD="sudo dnf upgrade -y"
+    elif command -v apt &> /dev/null; then
+        export PKG_MANAGER="apt"
+        export PKG_QUERY_INSTALLED="dpkg -s"
+        export PKG_QUERY_AVAILABLE="apt-cache show"
+        export PKG_INSTALL_CMD="sudo apt install -y"
+        export PKG_UPDATE_CMD="sudo apt update -y"
+    elif command -v pacman &> /dev/null; then
+        export PKG_MANAGER="pacman"
+        export PKG_QUERY_INSTALLED="pacman -Qi"
+        export PKG_QUERY_AVAILABLE="pacman -Si"
+        export PKG_INSTALL_CMD="sudo pacman -S --noconfirm"
+        export PKG_UPDATE_CMD="sudo pacman -Syu --noconfirm"
+    else
+        echo "Unsupported package manager. Exiting..."
+        exit 1
+    fi
+}
+
+# Initialize environmental variables
+detect_package_manager
+
+# ----------------------------------------------------------------------
+# Package Management Wrappers
+# ----------------------------------------------------------------------
+
 pkg_installed() {
     local PkgIn=$1
-    if dnf5 list --installed "${PkgIn}" &>/dev/null; then
+    if ${PKG_QUERY_INSTALLED} "${PkgIn}" &>/dev/null; then
         return 0
     else
         return 1
@@ -30,12 +83,12 @@ pkg_installed() {
 }
 
 chk_list() {
-    vrType="$1"
+    local vrType="$1"
     local inList=("${@:2}")
     for pkg in "${inList[@]}"; do
         if pkg_installed "${pkg}"; then
             printf -v "${vrType}" "%s" "${pkg}"
-            # shellcheck disable=SC2163 # dynamic variable
+            # shellcheck disable=SC2163
             export "${vrType}"
             return 0
         fi
@@ -46,7 +99,7 @@ chk_list() {
 
 pkg_available() {
     local PkgIn=$1
-    if dnf5 info "${PkgIn}" &>/dev/null; then
+    if ${PKG_QUERY_AVAILABLE} "${PkgIn}" &>/dev/null; then
         return 0
     else
         return 1
@@ -55,15 +108,19 @@ pkg_available() {
 
 copr_available() {
     local PkgIn=$1
-    # DNF5 natively checks enabled COPRs via specialized queries or filtering repo tracking
-    if dnf5 repoquery --enabled "${PkgIn}" &>/dev/null; then
-        return 0
-    else
-        return 1
+    # Fallback checking if the macro isn't supported natively on non-RPM/DNF systems
+    if [ -n "${PKG_REQUERY_COPR}" ]; then
+        if ${PKG_REQUERY_COPR} "${PkgIn}" &>/dev/null; then
+            return 0
+        fi
     fi
+    return 1
 }
 
-# NVIDIA detection for Fedora 44
+# ----------------------------------------------------------------------
+# System Detection & Logs
+# ----------------------------------------------------------------------
+
 nvidia_detect() {
     readarray -t dGPU < <(lspci -k | grep -E "(VGA|3D)" | awk -F ': ' '{print $NF}')
     if [ "${1}" == "--verbose" ]; then
@@ -73,51 +130,32 @@ nvidia_detect() {
         return 0
     fi
 
-    # Drivers option
     if [ "${1}" == "--drivers" ]; then
-        if command -v dnf5 >/dev/null; then
-            pkg_manager="Fedora (DNF5)"
-            pkg_name="akmod-nvidia"
-        elif command -v apt >/dev/null; then
-            pkg_manager="Debian-based"
-            pkg_name="nvidia-driver"
-        else
-            echo "Unsupported distribution."
-            return 1
-        fi
+        case "${PKG_MANAGER}" in
+            dnf5|dnf)
+                pkg_name="akmod-nvidia"
+                ;;
+            apt)
+                pkg_name="nvidia-driver"
+                ;;
+            pacman)
+                pkg_name="nvidia-utils"
+                ;;
+            *)
+                echo "Unsupported distribution pipeline."
+                return 1
+                ;;
+        esac
 
-        echo "Drivers for detected NVIDIA GPUs should be installed using ${pkg_manager}'s package manager."
+        echo "Drivers for detected NVIDIA GPUs should be installed using ${PKG_MANAGER}'s package manager."
         echo "Recommended package: ${pkg_name}"
         return 0
     fi
+
     if grep -iq nvidia <<<"${dGPU[@]}"; then
         return 0
     else
         return 1
-    fi
-}
-
-# Detect package manager favoring DNF5
-detect_package_manager() {
-    if command -v dnf5 &> /dev/null; then
-        export PKG_MANAGER="dnf5"
-        export PKG_INSTALL_CMD="sudo dnf5 install -y"
-        export PKG_UPDATE_CMD="sudo dnf5 check-upgrade -y"
-    elif command -v dnf &> /dev/null; then
-        export PKG_MANAGER="dnf"
-        export PKG_INSTALL_CMD="sudo dnf install -y"
-        export PKG_UPDATE_CMD="sudo dnf upgrade -y"
-    elif command -v apt &> /dev/null; then
-        export PKG_MANAGER="apt"
-        export PKG_INSTALL_CMD="sudo apt install -y"
-        export PKG_UPDATE_CMD="sudo apt update -y"
-    elif command -v pacman &> /dev/null; then
-        export PKG_MANAGER="pacman"
-        export PKG_INSTALL_CMD="sudo pacman -S --noconfirm"
-        export PKG_UPDATE_CMD="sudo pacman -Syu --noconfirm"
-    else
-        echo "Unsupported package manager. Exiting..."
-        exit 1
     fi
 }
 
@@ -155,9 +193,7 @@ print_log() {
     fi
 }
 
-# Ensure baseline tools are installed using modern package fallback
-detect_package_manager
-
+# Ensure baseline deployment tools are present safely
 if ! pkg_installed "pciutils"; then
     $PKG_INSTALL_CMD pciutils
 fi
