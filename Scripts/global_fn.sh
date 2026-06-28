@@ -12,19 +12,17 @@ cloneDir="$(dirname "${scrDir}")" # fallback, we will use CLONE_DIR now
 cloneDir="${CLONE_DIR:-${cloneDir}}"
 confDir="${XDG_CONFIG_HOME:-$HOME/.config}"
 cacheDir="${XDG_CACHE_HOME:-$HOME/.cache}/hyde"
-coprList=("dnf-plugins-core") # Fedora-specific, replaces aurList
 shlList=("zsh" "fish")
 
 export cloneDir
 export confDir
 export cacheDir
-export coprList
 export shlList
 
-# Package management functions
+# Package management functions using DNF5 for Fedora 44
 pkg_installed() {
     local PkgIn=$1
-    if dnf list installed "${PkgIn}" &>/dev/null; then
+    if dnf5 list --installed "${PkgIn}" &>/dev/null; then
         return 0
     else
         return 1
@@ -48,7 +46,7 @@ chk_list() {
 
 pkg_available() {
     local PkgIn=$1
-    if dnf info "${PkgIn}" &>/dev/null; then
+    if dnf5 info "${PkgIn}" &>/dev/null; then
         return 0
     else
         return 1
@@ -57,15 +55,15 @@ pkg_available() {
 
 copr_available() {
     local PkgIn=$1
-    # Check if package is available in enabled COPR repos
-    if dnf repoquery --repo=copr:* "${PkgIn}" &>/dev/null; then
+    # DNF5 natively checks enabled COPRs via specialized queries or filtering repo tracking
+    if dnf5 repoquery --enabled "${PkgIn}" &>/dev/null; then
         return 0
     else
         return 1
     fi
 }
 
-# NVIDIA detection for Fedora
+# NVIDIA detection for Fedora 44
 nvidia_detect() {
     readarray -t dGPU < <(lspci -k | grep -E "(VGA|3D)" | awk -F ': ' '{print $NF}')
     if [ "${1}" == "--verbose" ]; then
@@ -77,13 +75,12 @@ nvidia_detect() {
 
     # Drivers option
     if [ "${1}" == "--drivers" ]; then
-        # Identify the distribution
-        if command -v apt >/dev/null; then
+        if command -v dnf5 >/dev/null; then
+            pkg_manager="Fedora (DNF5)"
+            pkg_name="akmod-nvidia"
+        elif command -v apt >/dev/null; then
             pkg_manager="Debian-based"
             pkg_name="nvidia-driver"
-        elif command -v dnf >/dev/null; then
-            pkg_manager="Fedora"
-            pkg_name="akmod-nvidia"
         else
             echo "Unsupported distribution."
             return 1
@@ -100,17 +97,20 @@ nvidia_detect() {
     fi
 }
 
-
-# Detect package manager
+# Detect package manager favoring DNF5
 detect_package_manager() {
-    if command -v apt &> /dev/null; then
-        export PKG_MANAGER="apt"
-        export PKG_INSTALL_CMD="sudo apt install -y"
-        export PKG_UPDATE_CMD="sudo apt update -y"
+    if command -v dnf5 &> /dev/null; then
+        export PKG_MANAGER="dnf5"
+        export PKG_INSTALL_CMD="sudo dnf5 install -y"
+        export PKG_UPDATE_CMD="sudo dnf5 check-upgrade -y"
     elif command -v dnf &> /dev/null; then
         export PKG_MANAGER="dnf"
         export PKG_INSTALL_CMD="sudo dnf install -y"
-        export PKG_UPDATE_CMD="sudo dnf update -y"
+        export PKG_UPDATE_CMD="sudo dnf upgrade -y"
+    elif command -v apt &> /dev/null; then
+        export PKG_MANAGER="apt"
+        export PKG_INSTALL_CMD="sudo apt install -y"
+        export PKG_UPDATE_CMD="sudo apt update -y"
     elif command -v pacman &> /dev/null; then
         export PKG_MANAGER="pacman"
         export PKG_INSTALL_CMD="sudo pacman -S --noconfirm"
@@ -130,66 +130,21 @@ print_log() {
         [ -n "${section}" ] && echo -ne "\e[32m[$section] \e[0m"
         while (("$#")); do
             case "$1" in
-            -r | +r)
-                echo -ne "\e[31m$2\e[0m"
-                shift 2
-                ;; # Red
-            -g | +g)
-                echo -ne "\e[32m$2\e[0m"
-                shift 2
-                ;; # Green
-            -y | +y)
-                echo -ne "\e[33m$2\e[0m"
-                shift 2
-                ;; # Yellow
-            -b | +b)
-                echo -ne "\e[34m$2\e[0m"
-                shift 2
-                ;; # Blue
-            -m | +m)
-                echo -ne "\e[35m$2\e[0m"
-                shift 2
-                ;; # Magenta
-            -c | +c)
-                echo -ne "\e[36m$2\e[0m"
-                shift 2
-                ;; # Cyan
-            -wt | +w)
-                echo -ne "\e[37m$2\e[0m"
-                shift 2
-                ;; # White
-            -n | +n)
-                echo -ne "\e[96m$2\e[0m"
-                shift 2
-                ;; # Neon
-            -stat)
-                echo -ne "\e[30;46m $2 \e[0m :: "
-                shift 2
-                ;; # status
-            -crit)
-                echo -ne "\e[97;41m $2 \e[0m :: "
-                shift 2
-                ;; # critical
-            -warn)
-                echo -ne "WARNING :: \e[97;43m $2 \e[0m :: "
-                shift 2
-                ;; # warning
-            +)
-                echo -ne "\e[38;5;$2m$3\e[0m"
-                shift 3
-                ;; # Set color manually
-            -sec)
-                echo -ne "\e[32m[$2] \e[0m"
-                shift 2
-                ;; # section use for logs
-            -err)
-                echo -ne "ERROR :: \e[4;31m$2 \e[0m"
-                shift 2
-                ;; #error
-            *)
-                echo -ne "$1"
-                shift
-                ;;
+            -r | +r) echo -ne "\e[31m$2\e[0m"; shift 2 ;;
+            -g | +g) echo -ne "\e[32m$2\e[0m"; shift 2 ;;
+            -y | +y) echo -ne "\e[33m$2\e[0m"; shift 2 ;;
+            -b | +b) echo -ne "\e[34m$2\e[0m"; shift 2 ;;
+            -m | +m) echo -ne "\e[35m$2\e[0m"; shift 2 ;;
+            -c | +c) echo -ne "\e[36m$2\e[0m"; shift 2 ;;
+            -wt | +w) echo -ne "\e[37m$2\e[0m"; shift 2 ;;
+            -n | +n) echo -ne "\e[96m$2\e[0m"; shift 2 ;;
+            -stat) echo -ne "\e[30;46m $2 \e[0m :: "; shift 2 ;;
+            -crit) echo -ne "\e[97;41m $2 \e[0m :: "; shift 2 ;;
+            -warn) echo -ne "WARNING :: \e[97;43m $2 \e[0m :: "; shift 2 ;;
+            +) echo -ne "\e[38;5;$2m$3\e[0m"; shift 3 ;;
+            -sec) echo -ne "\e[32m[$2] \e[0m"; shift 2 ;;
+            -err) echo -ne "ERROR :: \e[4;31m$2 \e[0m"; shift 2 ;;
+            *) echo -ne "$1"; shift ;;
             esac
         done
         echo ""
@@ -199,10 +154,10 @@ print_log() {
         cat
     fi
 }
-# Ensure required tools are installed
+
+# Ensure baseline tools are installed using modern package fallback
+detect_package_manager
+
 if ! pkg_installed "pciutils"; then
-    sudo dnf install -y pciutils
-fi
-if ! pkg_installed "dnf-plugins-core"; then
-    sudo dnf install -y dnf-plugins-core
+    $PKG_INSTALL_CMD pciutils
 fi
